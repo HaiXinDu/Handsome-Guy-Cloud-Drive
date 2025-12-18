@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>局域网网盘</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #2563eb;
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .upload-area {
+            border: 2px dashed #d1d5db;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            transition: all 0.3s;
+        }
+        
+        .upload-area:hover, .upload-area.dragover {
+            border-color: #2563eb;
+            background: #f0f9ff;
+        }
+        
+        .btn {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background 0.3s;
+        }
+        
+        .btn:hover {
+            background: #1d4ed8;
+        }
+        
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        
+        .file-list {
+            margin-top: 20px;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        
+        .file-info {
+            flex: 1;
+        }
+        
+        .file-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn-small {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .btn-small:hover {
+            background: #059669;
+        }
+        
+        .progress {
+            width: 100%;
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: #2563eb;
+            transition: width 0.3s;
+        }
+        
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #10b981;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        .toast.error {
+            background: #ef4444;
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .folder-info {
+            background: #f0f9ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📁 局域网网盘</h1>
+            <p>支持文件和文件夹上传，自动创建时间戳文件夹</p>
+            <div style="margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 6px;">
+                <small style="color: #ffffff;">🌐 公网访问地址：</small>
+                <div style="margin-top: 5px;">
+                    <a href="https://2d774892.r1.cpolar.top" target="_blank" style="color: #ffffff; text-decoration: underline; margin-right: 15px;">
+                        🔒 https://2d774892.r1.cpolar.top
+                    </a>
+                    <a href="http://2d774892.r1.cpolar.top" target="_blank" style="color: #ffffff; text-decoration: underline;">
+                        🌍 http://2d774892.r1.cpolar.top
+                    </a>
+                </div>
+                <small style="color: #fbbf24; margin-top: 5px; display: block;">💡 点击链接可直接访问公网地址</small>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="upload-area" id="uploadArea">
+                <div style="font-size: 48px; margin-bottom: 20px;">📤</div>
+                <h3 style="margin: 10px 0;">拖拽文件到这里，或点击选择</h3>
+                <p style="color: #6b7280; margin: 10px 0;">支持单个文件、多个文件和整个文件夹</p>
+                
+                <div style="margin: 20px 0;" onclick="event.stopPropagation()">
+                    <label style="display: block; margin-bottom: 8px; font-weight: 500;">选择目标文件夹：</label>
+                    <select id="folderSelect" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 15px;" onclick="event.stopPropagation()">
+                        <option value="">新建文件夹（自定义命名）</option>
+                    </select>
+                    
+                    <label style="display: block; margin-bottom: 8px; font-weight: 500; margin-top: 10px;">自定义文件夹名称：</label>
+                    <input type="text" id="folderNameInput" placeholder="输入文件夹名称（可选）" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 10px;" onclick="event.stopPropagation()">
+                    <small style="color: #6b7280;">留空将使用时间戳命名：upload-2025-12-17T10-30-45</small>
+                </div>
+                
+                <div style="margin-top: 20px;" onclick="event.stopPropagation()">
+                    <input type="file" id="fileInput" multiple style="display: none;" webkitdirectory>
+                    <button class="btn" onclick="selectFiles()">选择文件</button>
+                    <button class="btn" onclick="selectFolders()" style="margin-left: 10px;">选择文件夹</button>
+                    <button class="btn" onclick="refreshFolders()" style="margin-left: 10px; background: #10b981;">刷新文件夹</button>
+                </div>
+            </div>
+            
+            <div class="progress hidden" id="progressContainer">
+                <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+            </div>
+            
+            <div id="folderInfo" class="folder-info hidden"></div>
+            
+            <div class="file-list" id="fileList"></div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+                <h3>📂 已上传的文件夹</h3>
+                <div id="folderList" style="margin-top: 10px;"></div>
+            </div>
+        </div>
+    </div>
+    <div style="margin: 0 auto;">最新公网地址:<a>https://2d774892.r1.cpolar.top</a>
+        <a>http://2d774892.r1.cpolar.top</a></div>
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const fileList = document.getElementById('fileList');
+        const folderInfo = document.getElementById('folderInfo');
+
+        // 拖拽事件
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            // 处理拖拽的文件和文件夹
+            const items = e.dataTransfer.items;
+            if (items && items.length > 0) {
+                // 检查是否包含文件夹
+                const hasDirectory = Array.from(items).some(item => 
+                    item.webkitGetAsEntry && item.webkitGetAsEntry().isDirectory
+                );
+                
+                if (hasDirectory) {
+                    // 有文件夹，使用完整的文件夹结构处理
+                    handleFiles(items);
+                } else {
+                    // 只有文件，直接处理
+                    const files = Array.from(e.dataTransfer.files);
+                    uploadFiles(files);
+                }
+            }
+        });
+
+        uploadArea.addEventListener('click', (e) => {
+            // 如果点击的是select或button，不触发文件选择
+            if (e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON' || e.target.closest('select') || e.target.closest('button')) {
+                return;
+            }
+            selectFiles();
+        });
+
+        // 选择文件
+        function selectFiles() {
+            fileInput.removeAttribute('webkitdirectory');
+            fileInput.click();
+        }
+
+        // 选择文件夹
+        function selectFolders() {
+            fileInput.setAttribute('webkitdirectory', '');
+            fileInput.value = ''; // 清空之前的值
+            fileInput.click();
+        }
+
+        fileInput.addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (files.length > 0 && fileInput.hasAttribute('webkitdirectory')) {
+                // 文件夹上传 - 文件已经有 webkitRelativePath
+                const fileList = Array.from(files);
+                uploadFiles(fileList);
+            } else {
+                // 普通文件上传
+                handleFiles(files);
+            }
+        });
+
+        // 处理文件上传
+        function handleFiles(items) {
+            if (!items || items.length === 0) return;
+
+            const files = [];
+            let pendingReads = 0;
+            
+            // 处理DataTransferItem或FileList
+            if (items[0].webkitGetAsEntry) {
+                // 拖拽上传 - 需要异步处理文件夹结构
+                pendingReads = 1;
+                traverseFileTree(items, () => {
+                    uploadFiles(files);
+                });
+            } else {
+                // 文件选择器上传
+                for (let file of items) {
+                    files.push(file);
+                }
+                uploadFiles(files);
+            }
+        }
+
+        // 遍历文件夹树
+        function traverseFileTree(items, callback) {
+            const files = [];
+            let processed = 0;
+            let total = 0;
+            
+            function processItem(item, path) {
+                total++;
+                
+                if (item.isFile) {
+                    item.file(file => {
+                        // 为文件设置相对路径，保持文件夹结构
+                        file.relativePath = path + file.name;
+                        files.push(file);
+                        processed++;
+                        if (processed === total) {
+                            callback(files);
+                        }
+                    });
+                } else if (item.isDirectory) {
+                    const dirReader = item.createReader();
+                    dirReader.readEntries(entries => {
+                        if (entries.length > 0) {
+                            // 如果有子项，递归处理
+                            const subPath = path + item.name + '/';
+                            let subTotal = 0;
+                            let subProcessed = 0;
+                            
+                            function checkComplete() {
+                                if (subProcessed === subTotal) {
+                                    processed++;
+                                    if (processed === total) {
+                                        callback(files);
+                                    }
+                                }
+                            }
+                            
+                            for (let entry of entries) {
+                                subTotal++;
+                                if (entry.isFile) {
+                                    entry.file(file => {
+                                        file.relativePath = subPath + file.name;
+                                        files.push(file);
+                                        subProcessed++;
+                                        checkComplete();
+                                    });
+                                } else if (entry.isDirectory) {
+                                    // 递归处理子目录
+                                    processDirectory(entry, subPath, () => {
+                                        subProcessed++;
+                                        checkComplete();
+                                    });
+                                }
+                            }
+                        } else {
+                            // 空目录
+                            processed++;
+                            if (processed === total) {
+                                callback(files);
+                            }
+                        }
+                    });
+                }
+            }
+            
+            function processDirectory(dir, path, callback) {
+                const dirReader = dir.createReader();
+                dirReader.readEntries(entries => {
+                    if (entries.length > 0) {
+                        let subTotal = entries.length;
+                        let subProcessed = 0;
+                        
+                        for (let entry of entries) {
+                            processItem(entry, path + dir.name + '/');
+                            subProcessed++;
+                        }
+                        
+                        if (subProcessed === subTotal) {
+                            callback();
+                        }
+                    } else {
+                        callback();
+                    }
+                });
+            }
+            
+            // 开始处理
+            for (let item of items) {
+                const entry = item.webkitGetAsEntry();
+                if (entry) {
+                    processItem(entry, '');
+                } else {
+                    processed++;
+                }
+            }
+        }
+
+        // 加载文件夹列表到选择器
+        function loadFolderSelector() {
+            fetch('/api/files')
+                .then(res => res.json())
+                .then(data => {
+                    const folderSelect = document.getElementById('folderSelect');
+                    if (!folderSelect) return;
+                    
+                    const folders = data.files.filter(item => item.type === 'folder');
+                    
+                    // 保留默认选项
+                    folderSelect.innerHTML = '<option value="">新建文件夹（默认）</option>';
+                    
+                    // 添加现有文件夹选项
+                    folders.forEach(folder => {
+                        const option = document.createElement('option');
+                        option.value = folder.name;
+                        option.textContent = `📁 ${folder.name} (${new Date(folder.modified).toLocaleDateString()})`;
+                        folderSelect.appendChild(option);
+                    });
+                })
+                .catch(err => console.error('获取文件夹列表失败:', err));
+        }
+        
+        // 刷新文件夹列表
+        function refreshFolders() {
+            loadFolderSelector();
+            showToast('文件夹列表已刷新');
+        }
+        
+        // 上传文件
+        function uploadFiles(files) {
+            if (!files || files.length === 0) return;
+
+            const formData = new FormData();
+            const folderSelect = document.getElementById('folderSelect');
+            const folderNameInput = document.getElementById('folderNameInput');
+            const selectedFolder = folderSelect ? folderSelect.value : '';
+            const customFolderName = folderNameInput ? folderNameInput.value.trim() : '';
+            
+            console.log('调试信息:');
+            console.log('- selectedFolder:', `"${selectedFolder}"`);
+            console.log('- customFolderName:', `"${customFolderName}"`);
+            console.log('- customFolderName.length:', customFolderName.length);
+            console.log('- Boolean(customFolderName):', Boolean(customFolderName));
+            console.log('- !selectedFolder:', !selectedFolder);
+            
+            // 优先级：现有文件夹 > 自定义名称 > 时间戳
+            if (selectedFolder && selectedFolder !== '') {
+                // 如果选择了现有文件夹，添加目标路径信息
+                console.log('选择现有文件夹:', selectedFolder);
+                formData.append('targetFolder', selectedFolder);
+            } else if (customFolderName && customFolderName.trim() !== '') {
+                // 验证自定义文件夹名称
+                console.log('使用自定义文件夹名称:', customFolderName);
+                
+                // 检查是否包含非法字符
+                if (/[<>:"/\\|?*]/.test(customFolderName)) {
+                    showToast('文件夹名称不能包含以下字符：<>:"/\\|?*', 'error');
+                    return;
+                }
+                
+                // 检查长度
+                if (customFolderName.length > 50) {
+                    showToast('文件夹名称不能超过50个字符', 'error');
+                    return;
+                }
+                
+                formData.append('customFolderName', customFolderName);
+            } else {
+                console.log('使用默认时间戳命名');
+            }
+            // 否则使用默认的时间戳命名
+            
+            // 添加文件到FormData，保持路径信息
+            files.forEach(file => {
+                if (file.relativePath) {
+                    formData.append('files', file, file.relativePath);
+                } else {
+                    formData.append('files', file);
+                }
+            });
+
+            // 打印FormData内容用于调试
+            console.log('FormData内容:');
+            for (let [key, value] of formData.entries()) {
+                console.log(`- ${key}:`, value);
+            }
+
+            // 显示进度条
+            progressContainer.classList.remove('hidden');
+            progressBar.style.width = '0%';
+
+            // 创建XMLHttpRequest以支持进度显示
+            const xhr = new XMLHttpRequest();
+
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percentComplete = Math.round((e.loaded / e.total) * 100);
+                    progressBar.style.width = percentComplete + '%';
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                if (xhr.status === 200) {
+                    const response = JSON.parse(xhr.responseText);
+                    console.log('服务器响应:', response);
+                    showUploadSuccess(response);
+                    // 刷新文件夹列表和选择器
+                    showFolderList();
+                    loadFolderSelector();
+                } else {
+                    console.error('上传失败，状态码:', xhr.status);
+                    showToast('上传失败', 'error');
+                }
+                progressContainer.classList.add('hidden');
+            });
+
+            xhr.addEventListener('error', () => {
+                showToast('网络错误', 'error');
+                progressContainer.classList.add('hidden');
+            });
+
+            xhr.open('POST', '/api/upload');
+            xhr.send(formData);
+        }
+
+        // 显示上传成功信息
+        function showUploadSuccess(response) {
+            const { uploaded, folder } = response;
+            
+            // 显示文件夹信息
+            let typeInfo = '';
+            if (folder.type === 'existing') {
+                typeInfo = '<br><span style="color: #2563eb;">📂 上传到现有文件夹</span>';
+            } else if (folder.type === 'custom') {
+                typeInfo = '<br><span style="color: #f59e0b;">✨ 自定义文件夹创建成功</span>';
+            } else {
+                typeInfo = '<br><span style="color: #10b981;">⏰ 时间戳文件夹创建成功</span>';
+            }
+            
+            folderInfo.innerHTML = `
+                <strong>📁 ${response.action}：${folder.name}</strong>
+                <br>📅 时间：${new Date(folder.timestamp).toLocaleString()}
+                <br>📊 文件数量：${uploaded.length} 个
+                <br>💾 总大小：${formatFileSize(uploaded.reduce((sum, file) => sum + file.size, 0))}
+                ${typeInfo}
+            `;
+            folderInfo.classList.remove('hidden');
+
+            // 显示文件列表
+            fileList.innerHTML = '<h3>📄 上传的文件：</h3>';
+            uploaded.forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-info">
+                        <strong>${file.originalName}</strong>
+                        <div style="color: #6b7280; font-size: 14px;">${formatFileSize(file.size)}</div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn-small" onclick="downloadFile('${file.originalName}', '${response.folder.name}')">下载</button>
+                    </div>
+                `;
+                fileList.appendChild(fileItem);
+            });
+
+            showToast(`成功上传 ${uploaded.length} 个文件`);
+        }
+
+        // 显示提示信息
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type === 'error' ? 'error' : ''}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // 下载文件
+        function downloadFile(filename, folderPath) {
+            const url = `/api/download/${encodeURIComponent(filename)}?path=${encodeURIComponent(folderPath)}`;
+            window.open(url, '_blank');
+        }
+
+        // 显示文件夹列表
+        function showFolderList() {
+            currentFolderPath = ''; // 重置路径
+            loadFolderContent('');
+        }
+
+        let currentFolderPath = '';
+        
+        // 查看文件夹内容
+        function viewFolder(folderName) {
+            const newPath = currentFolderPath ? `${currentFolderPath}/${folderName}` : folderName;
+            loadFolderContent(newPath);
+        }
+        
+        // 加载文件夹内容
+        function loadFolderContent(folderPath) {
+            const url = folderPath ? `/api/files?path=${encodeURIComponent(folderPath)}` : '/api/files';
+            
+            fetch(url)
+                .then(res => res.json())
+                .then(data => {
+                    currentFolderPath = data.currentPath || '';
+                    displayFolderContent(data);
+                })
+                .catch(err => {
+                    console.error('获取文件夹内容失败:', err);
+                    showToast('获取文件夹内容失败', 'error');
+                });
+        }
+        
+        // 显示文件夹内容
+        function displayFolderContent(data) {
+            const folderList = document.getElementById('folderList');
+            if (!folderList) return;
+            
+            let html = '';
+            
+            // 添加返回按钮
+            if (data.currentPath) {
+                html += `
+                    <div class="file-item">
+                        <div class="file-info">
+                            <strong>🔙 返回上级</strong>
+                            <div style="color: #6b7280; font-size: 14px;">${data.currentPath}</div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn-small" onclick="backToParent()">返回</button>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // 显示文件夹和文件
+            data.files.forEach(item => {
+                if (item.type === 'folder') {
+                    html += `
+                        <div class="file-item">
+                            <div class="file-info">
+                                <strong>📁 ${item.name}</strong>
+                                <div style="color: #6b7280; font-size: 14px;">${new Date(item.modified).toLocaleString()}</div>
+                            </div>
+                            <div class="file-actions">
+                                <button class="btn-small" onclick="viewFolder('${item.name}')">进入</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="file-item">
+                            <div class="file-info">
+                                <strong>📄 ${item.name}</strong>
+                                <div style="color: #6b7280; font-size: 14px;">${formatFileSize(item.size)} - ${new Date(item.modified).toLocaleString()}</div>
+                            </div>
+                            <div class="file-actions">
+                                <button class="btn-small" onclick="downloadFile('${item.name}', '${item.path.substring(0, item.path.lastIndexOf('/'))}')">下载</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+            
+            if (data.files.length === 0) {
+                html = '<p style="color: #6b7280; text-align: center; padding: 20px;">📂 文件夹为空</p>';
+            }
+            
+            // 添加统计信息
+            if (data.total > 0) {
+                html += `
+                    <div style="margin-top: 20px; padding: 10px; background: #f8fafc; border-radius: 6px; text-align: center;">
+                        <small style="color: #6b7280;">
+                            共 ${data.total} 个文件，总大小 ${formatFileSize(data.totalSize)}
+                        </small>
+                    </div>
+                `;
+            }
+            
+            folderList.innerHTML = html;
+        }
+        
+        // 返回上级目录
+        function backToParent() {
+            if (currentFolderPath) {
+                const parentPath = currentFolderPath.split('/').slice(0, -1).join('/');
+                loadFolderContent(parentPath);
+            } else {
+                showFolderList();
+            }
+        }
+
+        // 页面加载完成后显示服务器信息
+        window.addEventListener('load', () => {
+            fetch('/api/info')
+                .then(res => res.json())
+                .then(data => {
+                    console.log('服务器信息:', data);
+                })
+                .catch(err => console.error('获取服务器信息失败:', err));
+            
+            // 加载文件夹列表
+            showFolderList();
+            // 加载文件夹选择器
+            loadFolderSelector();
+        });
+    </script>
+</body>
+</html>

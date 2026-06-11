@@ -398,18 +398,42 @@ const wrap = fn => (req, res, next) => {
     }
 };
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'), {
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7天缓存
-    });
-});
+// pkg 打包后，静态文件从快照读取
+const isPkg = typeof process.pkg !== 'undefined';
 
-// 静态文件服务带缓存
-app.use(express.static(path.join(__dirname, 'public'), {
-    maxAge: '7d',
-    etag: true,
-    lastModified: true
-}));
+if (isPkg) {
+    // pkg 模式：直接从快照读取内嵌文件
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    const faviconPath = path.join(__dirname, 'public', 'favicon.json');
+    const indexHtml = fs.readFileSync(indexPath, 'utf-8');
+
+    app.get('/', (req, res) => {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+        res.send(indexHtml);
+    });
+
+    // favicon（如果有的话）
+    try {
+        const favicon = fs.readFileSync(faviconPath);
+        app.get('/favicon.json', (req, res) => {
+            res.setHeader('Content-Type', 'application/json');
+            res.send(favicon);
+        });
+    } catch (e) { /* 没有 favicon 忽略 */ }
+} else {
+    app.get('/', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'index.html'), {
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+    });
+
+    app.use(express.static(path.join(__dirname, 'public'), {
+        maxAge: '7d',
+        etag: true,
+        lastModified: true
+    }));
+}
 
 // 上传文件
 app.post('/api/upload', upload.array('files'), wrap((req, res) => {

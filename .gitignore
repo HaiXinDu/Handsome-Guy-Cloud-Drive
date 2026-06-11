@@ -2,6 +2,7 @@ node_modules/
 uploads/
 .temp_chunks/
 .playwright-cli/
+dist/
 .env
 *.zip
 screenshot.png

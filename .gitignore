@@ -1,5 +1,8 @@
 node_modules/
 uploads/
+.temp_chunks/
+.playwright-cli/
 .env
-.DS_Store
-npm-debug.log*
+*.zip
+screenshot.png
+$null

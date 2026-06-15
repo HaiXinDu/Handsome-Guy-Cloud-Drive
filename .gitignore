@@ -3,9 +3,9 @@ uploads/
 .temp_chunks/
 .playwright-cli/
 dist/*
-!dist/lan-file-server-portable.zip
+!dist/lan-file-server-v2.1.zip
 .env
 *.zip
-!dist/lan-file-server-portable.zip
+!dist/lan-file-server-v2.1.zip
 screenshot.png
 $null

@@ -990,6 +990,7 @@
                 }
 
                 this.queueActive = true;
+                appState.isUploading = true;
                 this.uploadResults = [];
                 elements.uploadQueue.classList.remove('hidden');
                 elements.progressContainer.classList.remove('hidden');
@@ -1074,6 +1075,7 @@
                 }, 3000);
 
                 this.queueActive = false;
+                appState.isUploading = false;
             },
 
             // 计算已上传总大小
@@ -1119,16 +1121,34 @@
                 });
             },
 
+            // 生成稳定的 uploadId（SHA-256 的前24字符），同一文件重新上传时可复用
+            async _generateStableUploadId(fingerprint) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(fingerprint);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                return hashHex.substring(0, 24);
+            },
+
             // 分块上传（>10MB 大文件）
             async _uploadChunked(file, onProgress, queueItem) {
                 const totalChunks = Math.ceil(file.size / this.CHUNK_SIZE);
-                const uploadId = `${Date.now().toString(36)}_${crypto.randomUUID().substring(0, 8)}`;
+                // 基于文件内容特征生成稳定的 uploadId（文件名+大小+最后修改时间），
+                // 重新选择同一文件时可以恢复之前的断点
+                const fileFingerprint = `${file.name}_${file.size}_${file.lastModified}`;
+                const uploadId = await this._generateStableUploadId(fileFingerprint);
 
                 // 检查是否有断点续传
                 let completedChunks = new Set();
                 try {
                     const statusRes = await fetch(`/api/upload/chunks/${uploadId}`);
-                    // 新 uploadId 不会有旧数据，这里仅为未来扩展留接口
+                    if (statusRes.ok) {
+                        const status = await statusRes.json();
+                        if (status.exists && status.completedChunks) {
+                            completedChunks = new Set(status.completedChunks);
+                        }
+                    }
                 } catch (e) { /* ignore */ }
 
                 onProgress(0);

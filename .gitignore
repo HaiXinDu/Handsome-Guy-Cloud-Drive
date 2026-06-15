@@ -2,10 +2,7 @@ node_modules/
 uploads/
 .temp_chunks/
 .playwright-cli/
-dist/*
-!dist/lan-file-server-portable.zip
+dist/
 .env
-*.zip
-!dist/lan-file-server-portable.zip
 screenshot.png
-$null
+.claude/

@@ -9,6 +9,15 @@ const crypto = require('crypto');
 const compression = require('compression');
 const archiver = require('archiver');
 
+const {
+  sanitizeFilename: _sanitizeFilename,
+  generateUniqueFolderName: _generateUniqueFolderName,
+  resolveSafePath: _resolveSafePath,
+  resolvePath: _resolvePath,
+  formatBytes,
+  getMimeType
+} = require('./lib/utils');
+
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const UPLOAD_DIR = path.resolve(__dirname, process.env.UPLOAD_DIR || 'uploads');
@@ -17,7 +26,6 @@ const DEDUP_DB_PATH = path.join(UPLOAD_DIR, '.dedup_hashes.json');
 
 // ── 分块上传配置 ──────────────────────────────────
 const CHUNK_SIZE = 5 * 1024 * 1024;       // 5MB 每块
-const MAX_PARALLEL_CHUNKS = 4;             // 每客户端最多并行块数
 const CONCURRENT_UPLOADS = 10;             // 全局并发上传数（多用户）
 
 // ── 配置 ──────────────────────────────────────────
@@ -32,6 +40,7 @@ const config = {
 // ── 日志工具 ──────────────────────────────────────
 const logger = {
     info: (msg, data) => config.enableLogging && console.log(`[INFO] ${new Date().toISOString()} - ${msg}`, data || ''),
+    warn: (msg, data) => config.enableLogging && console.warn(`[WARN] ${new Date().toISOString()} - ${msg}`, data || ''),
     error: (msg, err) => config.enableLogging && console.error(`[ERROR] ${new Date().toISOString()} - ${msg}`, err || ''),
     debug: (msg, data) => config.enableLogging && console.log(`[DEBUG] ${new Date().toISOString()} - ${msg}`, data || '')
 };
@@ -56,24 +65,37 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.header('X-Content-Type-Options', 'nosniff');
     res.header('X-Frame-Options', 'SAMEORIGIN');
-    res.header('X-XSS-Protection', '1; mode=block');
     res.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; base-uri 'self'; form-action 'self'");
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
 
-// 速率限制（简单内存实现，每IP每分钟最多100请求）
+// 速率限制（简单内存实现，每IP每分钟最多600请求）
 const rateLimiter = new Map();
 const RATE_LIMIT_WINDOW = 60000;
 const RATE_LIMIT_MAX = 600;
+const RATE_LIMITER_MAX_ENTRIES = 50000; // 防止 Map 无限膨胀
 setInterval(() => {
     const now = Date.now();
     for (const [ip, entry] of rateLimiter.entries()) {
         if (now > entry.resetAt) rateLimiter.delete(ip);
     }
+    // 如果条目仍然过多，淘汰最旧的
+    if (rateLimiter.size > RATE_LIMITER_MAX_ENTRIES) {
+        const entries = [...rateLimiter.entries()]
+            .sort((a, b) => a[1].resetAt - b[1].resetAt);
+        for (let i = 0; i < entries.length - RATE_LIMITER_MAX_ENTRIES; i++) {
+            rateLimiter.delete(entries[i][0]);
+        }
+    }
 }, 60000);
 
 app.use((req, res, next) => {
+    // 极端情况：Map 膨胀超过阈值，拒绝新连接避免内存溢出
+    if (rateLimiter.size > RATE_LIMITER_MAX_ENTRIES * 1.2) {
+        return res.status(503).json({ error: '服务繁忙，请稍后再试' });
+    }
     const ip = req.ip || req.connection.remoteAddress || 'unknown';
     const now = Date.now();
     const entry = rateLimiter.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
@@ -162,12 +184,17 @@ function saveDedupDB() {
     // debounce：500ms 内多次调用只写一次磁盘
     if (dedupSaveTimer) clearTimeout(dedupSaveTimer);
     dedupSaveTimer = setTimeout(() => {
-        try { fs.writeFileSync(DEDUP_DB_PATH, JSON.stringify(dedupDB, null, 2)); }
-        catch (err) { logger.error('保存去重数据库失败', err); }
+        saveDedupDBSync();
     }, 500);
 }
-// 进程退出前确保最后一次写入
-process.on('beforeExit', () => { if (dedupSaveTimer) { clearTimeout(dedupSaveTimer); saveDedupDB(); } });
+// 同步写入版本，用于进程退出时立即写盘
+function saveDedupDBSync() {
+    if (dedupSaveTimer) { clearTimeout(dedupSaveTimer); dedupSaveTimer = null; }
+    try { fs.writeFileSync(DEDUP_DB_PATH, JSON.stringify(dedupDB, null, 2)); }
+    catch (err) { logger.error('保存去重数据库失败', err); }
+}
+// 进程正常退出前确保最后一次写入
+process.on('beforeExit', () => saveDedupDBSync());
 loadDedupDB();
 
 // 计算文件 SHA256（流式，适合大文件）
@@ -181,58 +208,47 @@ function calcSHA256(filePath) {
     });
 }
 
-// 清理过期临时 chunk 文件（1小时未修改的）
+// 清理过期临时 chunk 文件（启动时和每10分钟运行一次）
 function cleanTempChunks() {
     try {
         if (!fs.existsSync(TEMP_DIR)) return;
         const now = Date.now();
-        fs.readdirSync(TEMP_DIR).forEach(dir => {
-            const dirPath = path.join(TEMP_DIR, dir);
+        fs.readdirSync(TEMP_DIR).forEach(entry => {
+            const entryPath = path.join(TEMP_DIR, entry);
             try {
-                const stats = fs.statSync(dirPath);
+                const stats = fs.statSync(entryPath);
                 if (stats.isDirectory() && (now - stats.mtimeMs > 3600000)) {
-                    fs.rmSync(dirPath, { recursive: true, force: true });
-                    logger.debug('清理过期临时目录', { dir });
+                    fs.rmSync(entryPath, { recursive: true, force: true });
+                    logger.debug('清理过期临时目录', { dir: entry });
+                } else if (stats.isFile() && entry.startsWith('chunk_') && (now - stats.mtimeMs > 3600000)) {
+                    // 清理孤儿 chunk 文件（上传中断导致未移动到目录的文件）
+                    fs.unlinkSync(entryPath);
+                    logger.debug('清理孤儿 chunk 文件', { file: entry });
                 }
             } catch (e) { /* skip */ }
         });
     } catch (e) { /* skip */ }
 }
+// 服务启动时立即清理一次
+cleanTempChunks();
 setInterval(cleanTempChunks, 600000); // 每10分钟清理一次
 
 // 获取本机IP
 function getLocalIP() {
-    const interfaces = os.networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-        for (const interface of interfaces[name]) {
-            if (interface.family === 'IPv4' && !interface.internal) {
-                return interface.address;
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+        for (const iface of ifaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                return iface.address;
             }
         }
     }
     return 'localhost';
 }
 
-// 文件名清理
+// 文件名清理（委托到 lib/utils，传入配置开关）
 function sanitizeFilename(filename) {
-    if (!config.enableSanitization) return filename;
-
-    const ext = path.extname(filename);
-    const name = path.basename(filename, ext);
-
-    // 移除或替换危险字符
-    const cleanName = name
-        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') // 移除控制字符和危险符号
-        .replace(/\s+/g, '_')
-        .replace(/^\.+/, '_') // 移除开头的点
-        .substring(0, 50); // 限制长度
-
-    // 防止文件名为空
-    if (!cleanName) {
-        return 'unnamed' + ext;
-    }
-
-    return cleanName + ext;
+    return _sanitizeFilename(filename, config.enableSanitization);
 }
 
 // 验证文件
@@ -248,14 +264,9 @@ function validateFile(file) {
     return true;
 }
 
-// 生成唯一文件夹名
+// 生成唯一文件夹名（委托到 lib/utils）
 function generateUniqueFolderName(customName = null) {
-    if (customName && customName.trim()) {
-        return sanitizeFilename(customName.trim());
-    }
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const hash = crypto.randomBytes(4).toString('hex');
-    return `upload-${timestamp}-${hash}`;
+    return _generateUniqueFolderName(customName);
 }
 
 // 配置multer存储
@@ -398,42 +409,18 @@ const wrap = fn => (req, res, next) => {
     }
 };
 
-// pkg 打包后，静态文件从快照读取
-const isPkg = typeof process.pkg !== 'undefined';
-
-if (isPkg) {
-    // pkg 模式：直接从快照读取内嵌文件
-    const indexPath = path.join(__dirname, 'public', 'index.html');
-    const faviconPath = path.join(__dirname, 'public', 'favicon.json');
-    const indexHtml = fs.readFileSync(indexPath, 'utf-8');
-
-    app.get('/', (req, res) => {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Cache-Control', 'public, max-age=604800');
-        res.send(indexHtml);
+// 静态文件服务
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'), {
+        maxAge: 7 * 24 * 60 * 60 * 1000
     });
+});
 
-    // favicon（如果有的话）
-    try {
-        const favicon = fs.readFileSync(faviconPath);
-        app.get('/favicon.json', (req, res) => {
-            res.setHeader('Content-Type', 'application/json');
-            res.send(favicon);
-        });
-    } catch (e) { /* 没有 favicon 忽略 */ }
-} else {
-    app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, 'public', 'index.html'), {
-            maxAge: 7 * 24 * 60 * 60 * 1000
-        });
-    });
-
-    app.use(express.static(path.join(__dirname, 'public'), {
-        maxAge: '7d',
-        etag: true,
-        lastModified: true
-    }));
-}
+app.use(express.static(path.join(__dirname, 'public'), {
+    maxAge: '7d',
+    etag: true,
+    lastModified: true
+}));
 
 // 上传文件
 app.post('/api/upload', upload.array('files'), wrap((req, res) => {
@@ -662,7 +649,7 @@ app.post('/api/upload/merge', wrap(async (req, res) => {
 }));
 
 // 获取文件列表（支持分页和搜索）
-app.get('/api/files', wrap((req, res) => {
+app.get('/api/files', wrap(async (req, res) => {
     const { path: queryPath = '', sortBy = 'name', sortOrder = 'asc', page = 1, pageSize = 50, search = '' } = req.query;
     const currentPage = parseInt(page, 10) || 1;
     const size = Math.min(parseInt(pageSize, 10) || 50, 200); // 上限 200
@@ -677,6 +664,7 @@ app.get('/api/files', wrap((req, res) => {
     const files = [];
     const folders = [];
 
+    // 第一轮：同步 stat 分类（stat 本身很快，不会阻塞）
     items.forEach(item => {
         if (search && !item.toLowerCase().includes(search.toLowerCase())) return;
 
@@ -693,19 +681,6 @@ app.get('/api/files', wrap((req, res) => {
         };
 
         if (stats.isDirectory()) {
-            const cacheKey = itemData.path;
-            let folderSize;
-            try {
-                if (config.cacheFolderSize && folderSizeCache.has(cacheKey)) {
-                    folderSize = folderSizeCache.get(cacheKey).size;
-                } else {
-                    folderSize = calculateFolderSize(itemPath);
-                    if (config.cacheFolderSize) {
-                        folderSizeCache.set(cacheKey, { size: folderSize, timestamp: Date.now() });
-                    }
-                }
-                itemData.size = folderSize;
-            } catch (e) { /* 忽略 */ }
             folders.push(itemData);
         } else {
             itemData.size = stats.size;
@@ -714,6 +689,22 @@ app.get('/api/files', wrap((req, res) => {
             files.push(itemData);
         }
     });
+
+    // 第二轮：异步并行计算所有文件夹大小（不阻塞事件循环）
+    await Promise.all(folders.map(async (folderData) => {
+        const cacheKey = folderData.path;
+        try {
+            if (config.cacheFolderSize && folderSizeCache.has(cacheKey)) {
+                folderData.size = folderSizeCache.get(cacheKey).size;
+            } else {
+                const itemPath = path.join(UPLOAD_DIR, folderData.path);
+                folderData.size = await calculateFolderSizeAsync(itemPath);
+                if (config.cacheFolderSize) {
+                    folderSizeCache.set(cacheKey, { size: folderData.size, timestamp: Date.now() });
+                }
+            }
+        } catch (e) { /* 忽略 */ }
+    }));
 
     // 排序
     const sortFns = {
@@ -888,7 +879,7 @@ app.get('/api/raw/:filename(*)', (req, res) => {
 // 获取文件详细信息（用于调试）
 app.get('/api/fileinfo', (req, res) => {
     const queryPath = req.query.path || '';
-    const result = resolvePath(queryPath, queryPath ? '' : null);
+    const result = resolvePath(queryPath);
     if (result.error) return res.status(result.status).json({ error: result.error });
 
     res.json({
@@ -914,9 +905,9 @@ app.get('/api/stats', wrap((req, res) => {
 }));
 
 // 健康检查接口
-app.get('/api/health', (req, res) => {
+app.get('/api/health', wrap(async (req, res) => {
     const mem = process.memoryUsage();
-    const storageStats = getStorageStats();
+    const storageStats = await getStorageStats();
     res.json({
         status: 'healthy',
         uptime: Math.floor(process.uptime()),
@@ -927,11 +918,11 @@ app.get('/api/health', (req, res) => {
         },
         storage: { totalSize: formatBytes(storageStats.totalSize), uploadDir: storageStats.path }
     });
-});
+}));
 
 // 服务器信息
-app.get('/api/info', wrap((req, res) => {
-    const storageStats = getStorageStats();
+app.get('/api/info', wrap(async (req, res) => {
+    const storageStats = await getStorageStats();
     res.json({
         version: '2.0.0',
         nodeVersion: process.version, platform: os.platform(), arch: os.arch(),
@@ -978,68 +969,7 @@ async function calculateFolderSizeAsync(folderPath, maxDepth = 10) {
     return totalSize;
 }
 
-function calculateFolderSize(folderPath, maxDepth = 10, currentDepth = 0) {
-    if (currentDepth >= maxDepth) {
-        return 0;
-    }
-
-    let totalSize = 0;
-    try {
-        const items = fs.readdirSync(folderPath);
-        for (const item of items) {
-            const itemPath = path.join(folderPath, item);
-            try {
-                const stats = fs.statSync(itemPath);
-                if (stats.isDirectory()) {
-                    totalSize += calculateFolderSize(itemPath, maxDepth, currentDepth + 1);
-                } else {
-                    totalSize += stats.size;
-                }
-            } catch (e) {
-                continue;
-            }
-        }
-    } catch (error) {
-        logger.debug('计算文件夹大小时出错', { path: folderPath, error: error.message });
-    }
-    return totalSize;
-}
-
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-}
-
-function getMimeType(filename) {
-    const ext = path.extname(filename).toLowerCase();
-    const mimeTypes = {
-        '.txt': 'text/plain',
-        '.html': 'text/html',
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.json': 'application/json',
-        '.pdf': 'application/pdf',
-        '.doc': 'application/msword',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        '.xls': 'application/vnd.ms-excel',
-        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.svg': 'image/svg+xml',
-        '.mp4': 'video/mp4',
-        '.mp3': 'audio/mpeg',
-        '.zip': 'application/zip',
-        '.rar': 'application/x-rar-compressed'
-    };
-    return mimeTypes[ext] || 'application/octet-stream';
-}
-
-function getStorageStats() {
+async function getStorageStats() {
     try {
         const stats = fs.statSync(UPLOAD_DIR);
         // 缓存 60 秒，避免每次 health/info 请求都递归扫描整个 uploads
@@ -1052,7 +982,7 @@ function getStorageStats() {
                 modified: stats.mtime
             };
         }
-        const totalSize = calculateFolderSize(UPLOAD_DIR);
+        const totalSize = await calculateFolderSizeAsync(UPLOAD_DIR);
         storageSizeCache = { size: totalSize, timestamp: now };
         return {
             path: UPLOAD_DIR,
@@ -1072,37 +1002,14 @@ function getStorageStats() {
 
 // ── 共享辅助：路径安全校验 ──────────────────────
 
-// 解析并校验路径（仅文件，拒绝目录）
+// 解析并校验路径（仅文件，拒绝目录）— 委托到 lib/utils
 function resolveSafePath(relativePath) {
-    const fullPath = path.resolve(UPLOAD_DIR, relativePath);
-    const root = path.resolve(UPLOAD_DIR);
-    if (!fullPath.startsWith(root + path.sep) && fullPath !== root) {
-        return { error: '非法路径', status: 403 };
-    }
-    if (!fs.existsSync(fullPath)) {
-        return { error: '文件不存在', status: 404 };
-    }
-    const stats = fs.statSync(fullPath);
-    if (stats.isDirectory()) {
-        return { error: '不能操作目录', status: 400 };
-    }
-    return { fullPath, stats };
+    return _resolveSafePath(UPLOAD_DIR, relativePath);
 }
 
-// 解析并校验路径（允许目录）
+// 解析并校验路径（允许目录）— 委托到 lib/utils
 function resolvePath(relativePath) {
-    if (!relativePath || relativePath === '/') {
-        return { fullPath: UPLOAD_DIR, stats: fs.statSync(UPLOAD_DIR) };
-    }
-    const fullPath = path.resolve(UPLOAD_DIR, relativePath);
-    const root = path.resolve(UPLOAD_DIR);
-    if (!fullPath.startsWith(root + path.sep) && fullPath !== root) {
-        return { error: '非法路径', status: 403 };
-    }
-    if (!fs.existsSync(fullPath)) {
-        return { error: '路径不存在', status: 404 };
-    }
-    return { fullPath, stats: fs.statSync(fullPath) };
+    return _resolvePath(UPLOAD_DIR, relativePath);
 }
 
 // 统一的文件流传输（支持 Range 请求、断点续传、ETag 缓存、大文件多用户并行下载）
@@ -1150,7 +1057,7 @@ function streamFile(req, res, fullPath, stats, options = {}) {
         res.setHeader('Content-Length', chunkSize);
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Disposition', disposition === 'inline' ? 'inline'
-            : `attachment; filename="${encodeURIComponent(name)}"`);
+            : `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
         res.setHeader('Cache-Control', cacheControl);
 
         logger.info('Range请求', { file: name, range: `bytes ${start}-${validEnd}/${fileSize}`, size: chunkSize });
@@ -1171,7 +1078,7 @@ function streamFile(req, res, fullPath, stats, options = {}) {
     // 完整文件下载
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Content-Disposition', disposition === 'inline' ? 'inline'
-        : `attachment; filename="${encodeURIComponent(name)}"`);
+        : `attachment; filename*=UTF-8''${encodeURIComponent(name)}`);
     res.setHeader('Content-Length', fileSize);
     res.setHeader('Cache-Control', cacheControl);
 
@@ -1188,14 +1095,13 @@ function streamFile(req, res, fullPath, stats, options = {}) {
 }
 
 // 统一记录访问统计（带内存上限，超过时淘汰最旧的条目）
-let accessStatsCleanupTimer = null;
 function recordAccess(key, type) {
     if (accessStats.has(key)) {
         const entry = accessStats.get(key);
         type === 'download' ? entry.downloadCount++ : entry.previewCount++;
         entry.lastAccess = new Date().toISOString();
     } else {
-        // 超过上限时淘汰最旧的 500 条
+        // 超过上限时淘汰最旧的 2000 条
         if (accessStats.size >= ACCESS_STATS_MAX) {
             const entries = Array.from(accessStats.entries())
                 .sort((a, b) => new Date(a[1].lastAccess) - new Date(b[1].lastAccess));
@@ -1224,7 +1130,7 @@ app.use((err, req, res, next) => {
 });
 
 // 启动服务器
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     const localIP = getLocalIP();
     logger.info('服务器启动成功', {
         port: PORT,
@@ -1243,19 +1149,21 @@ app.listen(PORT, '0.0.0.0', () => {
 });
 
 // 优雅关闭
-process.on('SIGTERM', () => {
-    logger.info('收到 SIGTERM 信号，正在关闭服务器');
-    process.exit(0);
-});
+function gracefulShutdown(signal) {
+    logger.info(`收到 ${signal} 信号，正在关闭服务器`);
+    saveDedupDBSync();
+    server.close(() => process.exit(0));
+    // 强制退出保护，5 秒后还未关闭则强制退出
+    setTimeout(() => process.exit(0), 5000);
+}
 
-process.on('SIGINT', () => {
-    logger.info('收到 SIGINT 信号，正在关闭服务器');
-    process.exit(0);
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // 未捕获异常处理
 process.on('uncaughtException', (err) => {
     logger.error('未捕获的异常', err);
+    saveDedupDBSync();
     process.exit(1);
 });
 

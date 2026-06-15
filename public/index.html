@@ -738,8 +738,6 @@
     <script>
         // 全局变量和配置
         const APP_CONFIG = {
-            retryAttempts: 3,
-            retryDelay: 1000,
             toastDuration: 3000
         };
 
@@ -990,6 +988,7 @@
                 }
 
                 this.queueActive = true;
+                appState.isUploading = true;
                 this.uploadResults = [];
                 elements.uploadQueue.classList.remove('hidden');
                 elements.progressContainer.classList.remove('hidden');
@@ -1074,6 +1073,7 @@
                 }, 3000);
 
                 this.queueActive = false;
+                appState.isUploading = false;
             },
 
             // 计算已上传总大小
@@ -1119,16 +1119,34 @@
                 });
             },
 
+            // 生成稳定的 uploadId（SHA-256 的前24字符），同一文件重新上传时可复用
+            async _generateStableUploadId(fingerprint) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(fingerprint);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                return hashHex.substring(0, 24);
+            },
+
             // 分块上传（>10MB 大文件）
             async _uploadChunked(file, onProgress, queueItem) {
                 const totalChunks = Math.ceil(file.size / this.CHUNK_SIZE);
-                const uploadId = `${Date.now().toString(36)}_${crypto.randomUUID().substring(0, 8)}`;
+                // 基于文件内容特征生成稳定的 uploadId（文件名+大小+最后修改时间），
+                // 重新选择同一文件时可以恢复之前的断点
+                const fileFingerprint = `${file.name}_${file.size}_${file.lastModified}`;
+                const uploadId = await this._generateStableUploadId(fileFingerprint);
 
                 // 检查是否有断点续传
                 let completedChunks = new Set();
                 try {
                     const statusRes = await fetch(`/api/upload/chunks/${uploadId}`);
-                    // 新 uploadId 不会有旧数据，这里仅为未来扩展留接口
+                    if (statusRes.ok) {
+                        const status = await statusRes.json();
+                        if (status.exists && status.completedChunks) {
+                            completedChunks = new Set(status.completedChunks);
+                        }
+                    }
                 } catch (e) { /* ignore */ }
 
                 onProgress(0);
@@ -1240,7 +1258,7 @@
                     <div class="queue-item" id="queue-item-${item.id}">
                         <span class="queue-icon">${item.el.icon}</span>
                         <div class="queue-info">
-                            <div class="queue-name" title="${item.el.name}">${item.el.name}</div>
+                            <div class="queue-name" title="${utils.escapeHtml(item.el.name)}">${utils.escapeHtml(item.el.name)}</div>
                             <div class="queue-size">${item.el.size}</div>
                         </div>
                         <div class="queue-progress">
@@ -1282,7 +1300,7 @@
                     elements.folderInfo.innerHTML = `
                         <strong>📤 上传完成</strong>
                         <div style="margin-top: 10px; font-size: 14px;">
-                            <div>📁 文件夹：${firstResult.folder || '当前目录'}</div>
+                            <div>📁 文件夹：${utils.escapeHtml(firstResult.folder || '当前目录')}</div>
                             <div>📊 文件数量：${successResults.length} 个成功${skippedResults.length > 0 ? `，${skippedResults.length} 个跳过（已存在）` : ''}</div>
                             <div>💾 大小：${utils.formatFileSize(totalSize)}</div>
                         </div>
@@ -1297,7 +1315,7 @@
                                     <div class="file-info">
                                         <div class="file-name">
                                             <span class="file-icon">${utils.getFileIcon(r.fileName || '')}</span>
-                                            ${r.fileName || r.originalName || '未知'}
+                                            ${utils.escapeHtml(r.fileName || r.originalName || '未知')}
                                             ${r.dedupSkipped ? '<span style="color:#f59e0b;font-size:12px"> (已存在)</span>' : ''}
                                         </div>
                                         <div class="file-meta">
@@ -1360,7 +1378,7 @@
                     modal.className = 'preview-modal';
                     modal.innerHTML = `
                         <button class="preview-close" onclick="this.parentElement.remove()">×</button>
-                        <img src="/api/preview/${encodeURIComponent(fullPath)}" class="preview-content" alt="${filename}">
+                        <img src="/api/preview/${encodeURIComponent(fullPath)}" class="preview-content" alt="${utils.escapeHtml(filename)}">
                     `;
                     document.body.appendChild(modal);
                     modal.onclick = (e) => {
@@ -1805,10 +1823,12 @@
 
                 const toast = document.createElement('div');
                 toast.className = `toast ${type}`;
-                toast.innerHTML = `
-                    <span>${type === 'success' ? '✓' : type === 'error' ? '✗' : '⚠'}</span>
-                    <span>${message}</span>
-                `;
+                const iconSpan = document.createElement('span');
+                iconSpan.textContent = type === 'success' ? '✓' : type === 'error' ? '✗' : '⚠';
+                const msgSpan = document.createElement('span');
+                msgSpan.textContent = message;
+                toast.appendChild(iconSpan);
+                toast.appendChild(msgSpan);
                 document.body.appendChild(toast);
 
                 // 自动移除

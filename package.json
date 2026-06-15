@@ -3,18 +3,52 @@
   "version": "2.0.0",
   "description": "局域网网盘系统 - 便携版",
   "main": "server.js",
-  "bin": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "lint": "eslint server.js public/",
+    "format": "prettier --write \"**/*.{js,json,md,html}\"",
+    "format:check": "prettier --check \"**/*.{js,json,md,html}\"",
+    "test": "node --test tests/"
   },
   "dependencies": {
-    "archiver": "^8.0.0",
+    "archiver": "^7.0.1",
     "compression": "^1.8.1",
     "dotenv": "^17.4.2",
     "express": "^4.18.2",
     "multer": "^1.4.5-lts.1"
   },
   "devDependencies": {
-    "pkg": "^5.8.1"
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0"
+  },
+  "eslintConfig": {
+    "env": { "node": true, "es2022": true },
+    "extends": "eslint:recommended",
+    "parserOptions": { "ecmaVersion": 2022 },
+    "rules": {
+      "no-unused-vars": ["warn", { "argsIgnorePattern": "^(next|res|req|e)$" }],
+      "no-console": "off",
+      "prefer-const": "warn",
+      "no-var": "warn",
+      "eqeqeq": ["warn", "smart"]
+    },
+    "overrides": [
+      {
+        "files": ["public/**/*.js", "public/**/*.html"],
+        "env": { "browser": true, "node": false },
+        "globals": { "crypto": "readonly", "XMLHttpRequest": "readonly", "FormData": "readonly", "fetch": "readonly" }
+      }
+    ],
+    "ignorePatterns": ["node_modules/", "dist/", "uploads/", ".temp_chunks/"]
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "none",
+    "printWidth": 100,
+    "bracketSpacing": true,
+    "arrowParens": "avoid",
+    "endOfLine": "lf"
   }
 }

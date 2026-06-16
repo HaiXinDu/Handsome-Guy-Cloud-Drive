@@ -7,6 +7,7 @@
     <title>网盘</title>
     <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
     <link rel="manifest" href="/manifest.json">
+    <script src="/jszip.min.js"></script>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -970,6 +971,36 @@
             queueActive: false,
             uploadResults: [],
 
+            // 检测是否为文件夹上传（文件带有 webkitRelativePath）
+            _isFolderUpload(files) {
+                return files.length > 0 && files[0].webkitRelativePath && files[0].webkitRelativePath !== '';
+            },
+
+            // 将文件夹压缩为 zip blob
+            async _zipFolder(files) {
+                const zip = new JSZip();
+                const folderName = files[0].webkitRelativePath.split('/')[0];
+
+                for (const file of files) {
+                    // webkitRelativePath 格式: "folderName/subdir/file.txt"
+                    const relativePath = file.webkitRelativePath;
+                    zip.file(relativePath, file);
+                }
+
+                const blob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'DEFLATE',
+                    compressionOptions: { level: 1 }  // 最低压缩级别，局域网内速度优先
+                }, (meta) => {
+                    const pct = meta.percent.toFixed(0);
+                    elements.progressBar.style.width = pct + '%';
+                });
+
+                // 转为 File 对象方便后续上传
+                const zipFile = new File([blob], folderName + '.zip', { type: 'application/zip' });
+                return zipFile;
+            },
+
             async uploadFiles(files) {
                 if (!files || files.length === 0) return;
                 if (this.queueActive) {
@@ -993,11 +1024,28 @@
                 elements.uploadQueue.classList.remove('hidden');
                 elements.progressContainer.classList.remove('hidden');
 
-                const totalSize = files.reduce((s, f) => s + f.size, 0);
+                // 文件夹上传 → 先压缩为 zip
+                let uploadTarget = files;
+                if (this._isFolderUpload(files)) {
+                    const folderName = files[0].webkitRelativePath.split('/')[0];
+                    utils.showToast(`正在压缩文件夹 "${folderName}"...`, 'warning');
+                    try {
+                        uploadTarget = [await this._zipFolder(files)];
+                        utils.showToast(`压缩完成，开始上传 ${utils.formatFileSize(uploadTarget[0].size)}`, 'success');
+                    } catch (e) {
+                        utils.showToast('压缩失败: ' + e.message, 'error');
+                        this.queueActive = false;
+                        appState.isUploading = false;
+                        elements.progressContainer.classList.add('hidden');
+                        return;
+                    }
+                }
+
+                const totalSize = uploadTarget.reduce((s, f) => s + f.size, 0);
                 let uploadedSize = 0;
 
                 // 初始化队列 UI
-                const queueItems = files.map((file, i) => ({
+                const queueItems = uploadTarget.map((file, i) => ({
                     id: `q_${Date.now()}_${i}`,
                     file, size: file.size,
                     progress: 0,
@@ -1226,16 +1274,16 @@
                 await Promise.all(workers);
 
                 // 合并分块
-                const mergeFormData = new FormData();
-                mergeFormData.append('uploadId', uploadId);
+                const mergeBody = { uploadId };
                 const selectedFolder = elements.folderSelect.value;
                 const customFolderName = elements.folderNameInput.value.trim();
-                if (selectedFolder) mergeFormData.append('targetFolder', selectedFolder);
-                else if (customFolderName) mergeFormData.append('customFolderName', customFolderName);
+                if (selectedFolder) mergeBody.targetFolder = selectedFolder;
+                else if (customFolderName) mergeBody.customFolderName = customFolderName;
 
                 const mergeRes = await fetch('/api/upload/merge', {
                     method: 'POST',
-                    body: mergeFormData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(mergeBody)
                 });
 
                 if (!mergeRes.ok) {
@@ -1293,14 +1341,28 @@
                 const skippedResults = this.uploadResults.filter(r => r.dedupSkipped);
                 const allUploaded = [...successResults, ...skippedResults];
 
-                if (allUploaded.length > 0) {
+                // 统一提取文件名、大小、文件夹（兼容传统上传和分块上传的响应格式）
+                const flatList = allUploaded.map(r => {
+                    const files = r.uploaded || [r];
+                    return files.map(f => ({
+                        name: f.fileName || f.originalName || '未知',
+                        size: f.size || r.totalSize || 0,
+                        icon: utils.getFileIcon(f.fileName || f.originalName || ''),
+                        dedupSkipped: r.dedupSkipped || false
+                    }));
+                }).flat();
+
+                if (flatList.length > 0) {
                     const firstResult = allUploaded[0];
-                    const totalSize = allUploaded.reduce((s, r) => s + (r.size || 0), 0);
+                    const folderName = typeof firstResult.folder === 'object'
+                        ? (firstResult.folder.name || firstResult.folder.path || '当前目录')
+                        : (firstResult.folder || '当前目录');
+                    const totalSize = flatList.reduce((s, f) => s + f.size, 0);
 
                     elements.folderInfo.innerHTML = `
                         <strong>📤 上传完成</strong>
                         <div style="margin-top: 10px; font-size: 14px;">
-                            <div>📁 文件夹：${utils.escapeHtml(firstResult.folder || '当前目录')}</div>
+                            <div>📁 文件夹：${utils.escapeHtml(folderName)}</div>
                             <div>📊 文件数量：${successResults.length} 个成功${skippedResults.length > 0 ? `，${skippedResults.length} 个跳过（已存在）` : ''}</div>
                             <div>💾 大小：${utils.formatFileSize(totalSize)}</div>
                         </div>
@@ -1310,16 +1372,16 @@
                     elements.fileList.innerHTML = `
                         <h3 style="margin:15px 0 10px">📄 上传的文件：</h3>
                         <div class="file-list">
-                            ${allUploaded.map(r => `
+                            ${flatList.map(f => `
                                 <div class="file-item">
                                     <div class="file-info">
                                         <div class="file-name">
-                                            <span class="file-icon">${utils.getFileIcon(r.fileName || '')}</span>
-                                            ${utils.escapeHtml(r.fileName || r.originalName || '未知')}
-                                            ${r.dedupSkipped ? '<span style="color:#f59e0b;font-size:12px"> (已存在)</span>' : ''}
+                                            <span class="file-icon">${f.icon}</span>
+                                            ${utils.escapeHtml(f.name)}
+                                            ${f.dedupSkipped ? '<span style="color:#f59e0b;font-size:12px"> (已存在)</span>' : ''}
                                         </div>
                                         <div class="file-meta">
-                                            <span>${utils.formatFileSize(r.size || 0)}</span>
+                                            <span>${utils.formatFileSize(f.size)}</span>
                                         </div>
                                     </div>
                                 </div>

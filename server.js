@@ -254,13 +254,11 @@ function sanitizeFilename(filename) {
 // 验证文件
 function validateFile(file) {
     const ext = path.extname(file.originalname).toLowerCase();
-    
-    // 检查是否为禁止的文件类型
     if (config.blockedExtensions.includes(ext)) {
-        throw new Error(`文件类型 ${ext} 不被允许上传`);
+        const err = new Error(`文件类型 ${ext} 不被允许上传`);
+        err.code = 'BLOCKED_EXTENSION';
+        throw err;
     }
-    
-    // 检查文件大小（不限制大小）
     return true;
 }
 
@@ -655,6 +653,16 @@ app.get('/api/files', wrap(async (req, res) => {
     const size = Math.min(parseInt(pageSize, 10) || 50, 200); // 上限 200
     const offset = (currentPage - 1) * size;
 
+    // 检查 NTFS 保留名
+    if (queryPath) {
+        const reservedNames = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+        for (const seg of queryPath.replace(/\\/g, '/').split('/')) {
+            if (reservedNames.test(seg) || reservedNames.test(seg.replace(/\..*$/, ''))) {
+                return res.status(403).json({ error: '非法路径' });
+            }
+        }
+    }
+
     const currentPath = queryPath ? path.join(UPLOAD_DIR, queryPath) : UPLOAD_DIR;
     if (!fs.existsSync(currentPath)) {
         return res.json({ files: [], currentPath: queryPath, error: '路径不存在' });
@@ -783,9 +791,7 @@ app.get('/api/download-folder', (req, res) => {
 
     // 创建 zip 流，直接 pipe 到响应（零磁盘占用）
     // store=true：纯打包不压缩，局域网内速度最快（磁盘读速 ≈ 打包速度）
-    const archive = new archiver.ZipArchive({
-        store: true
-    });
+    const archive = archiver('zip', { store: true });
 
     archive.on('error', (err) => {
         logger.error('文件夹压缩失败', { folder: folderPath, error: err.message });
@@ -1125,6 +1131,7 @@ app.use((err, req, res, next) => {
     if (err.code === 'LIMIT_FILE_SIZE')    return res.status(413).json({ error: '文件太大' });
     if (err.code === 'LIMIT_FILE_COUNT')   return res.status(413).json({ error: '文件数量太多' });
     if (err.code === 'LIMIT_UNEXPECTED_FILE') return res.status(400).json({ error: '意外的文件字段' });
+    if (err.code === 'BLOCKED_EXTENSION')  return res.status(400).json({ error: err.message });
 
     res.status(500).json({ error: '服务器内部错误' });
 });

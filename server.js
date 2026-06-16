@@ -19,7 +19,7 @@ const {
 } = require('./lib/utils');
 
 const app = express();
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT = parseInt(process.env.PORT, 10) || 5500;
 const UPLOAD_DIR = path.resolve(__dirname, process.env.UPLOAD_DIR || 'uploads');
 const TEMP_DIR = path.resolve(__dirname, process.env.TEMP_DIR || '.temp_chunks');
 const DEDUP_DB_PATH = path.join(UPLOAD_DIR, '.dedup_hashes.json');

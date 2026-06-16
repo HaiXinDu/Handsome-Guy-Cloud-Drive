@@ -6,8 +6,8 @@
     <meta name="description" content="文件共享网盘，支持文件和文件夹上传下载">
     <title>网盘</title>
     <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
-    <link rel="manifest" href="/manifest.json">
-    <script src="/jszip.min.js"></script>
+    <link rel="manifest" href="manifest.json">
+    <script src="jszip.min.js"></script>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -1165,7 +1165,7 @@
                     xhr.addEventListener('error', () => reject(new Error('网络错误')));
                     xhr.addEventListener('timeout', () => reject(new Error('上传超时')));
                     xhr.timeout = 600000;
-                    xhr.open('POST', '/api/upload');
+                    xhr.open('POST', 'api/upload');
                     xhr.send(formData);
                 });
             },
@@ -1191,7 +1191,7 @@
                 // 检查是否有断点续传
                 let completedChunks = new Set();
                 try {
-                    const statusRes = await fetch(`/api/upload/chunks/${uploadId}`);
+                    const statusRes = await fetch(`api/upload/chunks/${uploadId}`);
                     if (statusRes.ok) {
                         const status = await statusRes.json();
                         if (status.exists && status.completedChunks) {
@@ -1246,7 +1246,7 @@
                                 xhr.addEventListener('error', () => reject(new Error('网络错误')));
                                 xhr.addEventListener('timeout', () => reject(new Error('分块超时')));
                                 xhr.timeout = this.CHUNK_TIMEOUT;
-                                xhr.open('POST', '/api/upload/chunk');
+                                xhr.open('POST', 'api/upload/chunk');
                                 xhr.send(formData);
                             });
 
@@ -1283,7 +1283,7 @@
                 if (selectedFolder) mergeBody.targetFolder = selectedFolder;
                 else if (customFolderName) mergeBody.customFolderName = customFolderName;
 
-                const mergeRes = await fetch('/api/upload/merge', {
+                const mergeRes = await fetch('api/upload/merge', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(mergeBody)
@@ -1396,7 +1396,7 @@
             },
 
             loadFolderSelector() {
-                fetch('/api/files')
+                fetch('api/files')
                     .then(res => res.json())
                     .then(data => {
                         const folders = data.files.filter(item => item.type === 'folder');
@@ -1418,7 +1418,7 @@
         const fileManager = {
             // 下载文件
             downloadFile(filename, folderPath) {
-                const url = `/api/download/${encodeURIComponent(filename)}?path=${encodeURIComponent(folderPath)}`;
+                const url = `api/download/${encodeURIComponent(filename)}?path=${encodeURIComponent(folderPath)}`;
                 const link = document.createElement('a');
                 link.href = url;
                 link.download = filename;
@@ -1443,7 +1443,7 @@
                     modal.className = 'preview-modal';
                     modal.innerHTML = `
                         <button class="preview-close" onclick="this.parentElement.remove()">×</button>
-                        <img src="/api/preview/${encodeURIComponent(fullPath)}" class="preview-content" alt="${utils.escapeHtml(filename)}">
+                        <img src="api/preview/${encodeURIComponent(fullPath)}" class="preview-content" alt="${utils.escapeHtml(filename)}">
                     `;
                     document.body.appendChild(modal);
                     modal.onclick = (e) => {
@@ -1451,7 +1451,7 @@
                     };
                 } else if (['.pdf'].includes(ext)) {
                     // PDF 在新窗口打开
-                    window.open(`/api/preview/${encodeURIComponent(fullPath)}`, '_blank');
+                    window.open(`api/preview/${encodeURIComponent(fullPath)}`, '_blank');
                 } else {
                     utils.showToast('此文件类型不支持预览', 'warning');
                 }
@@ -1460,7 +1460,7 @@
             // 原始下载（绕过所有处理，直接下载原始文件）
             downloadRawFile(filename, folderPath) {
                 const fullPath = folderPath ? `${folderPath}/${filename}` : filename;
-                const url = `/api/raw/${encodeURIComponent(fullPath)}`;
+                const url = `api/raw/${encodeURIComponent(fullPath)}`;
                 const link = document.createElement('a');
                 link.href = url;
                 link.download = filename;
@@ -1475,7 +1475,7 @@
 
             // 下载文件夹（打包为 zip）
             downloadFolder(folderPath) {
-                const url = `/api/download-folder?path=${encodeURIComponent(folderPath)}`;
+                const url = `api/download-folder?path=${encodeURIComponent(folderPath)}`;
                 const link = document.createElement('a');
                 link.href = url;
                 link.download = '';
@@ -1517,7 +1517,7 @@
                 // 下载文件夹（zip）
                 for (const folderPath of folders) {
                     const link = document.createElement('a');
-                    link.href = `/api/download-folder?path=${encodeURIComponent(folderPath)}`;
+                    link.href = `api/download-folder?path=${encodeURIComponent(folderPath)}`;
                     link.target = '_blank';
                     document.body.appendChild(link);
                     link.click();
@@ -1531,7 +1531,7 @@
                     const fileName = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
                     const folderPath = lastSlash >= 0 ? filePath.substring(0, lastSlash) : '';
                     const link = document.createElement('a');
-                    link.href = `/api/download/${encodeURIComponent(fileName)}?path=${encodeURIComponent(folderPath)}`;
+                    link.href = `api/download/${encodeURIComponent(fileName)}?path=${encodeURIComponent(folderPath)}`;
                     link.download = fileName;
                     link.target = '_blank';
                     document.body.appendChild(link);
@@ -1582,7 +1582,7 @@
 
                 try {
                     const paths = Array.from(appState.selectedItems);
-                    const response = await fetch('/api/delete', {
+                    const response = await fetch('api/delete', {
                         method: 'DELETE',
                         headers: {
                             'Content-Type': 'application/json'
@@ -1610,7 +1610,7 @@
                 }
 
                 try {
-                    const response = await fetch('/api/delete', {
+                    const response = await fetch('api/delete', {
                         method: 'DELETE',
                         headers: {
                             'Content-Type': 'application/json'
@@ -1648,7 +1648,7 @@
                         params.set('search', appState.searchQuery);
                     }
 
-                    const url = `/api/files?${params.toString()}`;
+                    const url = `api/files?${params.toString()}`;
                     const response = await fetch(url);
                     const data = await response.json();
 
@@ -1984,7 +1984,7 @@
 
             // 加载服务器信息（失败不阻塞）
             try {
-                const response = await fetch('/api/info');
+                const response = await fetch('api/info');
                 const serverInfo = await response.json();
                 console.log('服务器信息:', serverInfo);
                 if (serverInfo.version) {

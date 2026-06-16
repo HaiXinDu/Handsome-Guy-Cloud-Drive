@@ -978,6 +978,9 @@
 
             // 将文件夹压缩为 zip blob
             async _zipFolder(files) {
+                if (typeof JSZip === 'undefined') {
+                    throw new Error('JSZip 未加载，请刷新页面重试');
+                }
                 const zip = new JSZip();
                 const folderName = files[0].webkitRelativePath.split('/')[0];
 
@@ -1976,48 +1979,48 @@
 
         // 页面初始化
         document.addEventListener('DOMContentLoaded', async () => {
+            // 初始化事件处理器
+            eventHandlers.init();
+
+            // 加载服务器信息（失败不阻塞）
             try {
-                // 初始化事件处理器
-                eventHandlers.init();
-                
-                // 加载服务器信息
                 const response = await fetch('/api/info');
                 const serverInfo = await response.json();
                 console.log('服务器信息:', serverInfo);
-                
-                // 显示版本信息
                 if (serverInfo.version) {
                     document.title += ` v${serverInfo.version}`;
                 }
-                
-                // 加载文件夹列表
-                await folderManager.loadFolderList();
-                
-                // 加载文件夹选择器
-                uploadManager.loadFolderSelector();
-                
-                // 添加键盘快捷键
-                document.addEventListener('keydown', (e) => {
-                    if (e.ctrlKey || e.metaKey) {
-                        switch(e.key) {
-                            case 'o':
-                                e.preventDefault();
-                                eventHandlers.selectFiles();
-                                break;
-                            case 'r':
-                                e.preventDefault();
-                                eventHandlers.refreshFolders();
-                                break;
-                        }
-                    }
-                });
-                
-                utils.showToast('局域网网盘已就绪', 'success');
-                
-            } catch (error) {
-                console.error('初始化失败:', error);
-                utils.showToast('初始化失败，请刷新页面重试', 'error');
+            } catch (e) {
+                console.warn('获取服务器信息失败，使用默认配置');
             }
+
+            // 加载文件夹列表和选择器
+            try {
+                await folderManager.loadFolderList();
+                uploadManager.loadFolderSelector();
+            } catch (e) {
+                console.error('加载文件列表失败:', e);
+                utils.showToast('加载失败，请检查服务是否启动', 'error');
+                return;
+            }
+
+            // 键盘快捷键
+            document.addEventListener('keydown', (e) => {
+                if (e.ctrlKey || e.metaKey) {
+                    switch(e.key) {
+                        case 'o':
+                            e.preventDefault();
+                            eventHandlers.selectFiles();
+                            break;
+                        case 'r':
+                            e.preventDefault();
+                            eventHandlers.refreshFolders();
+                            break;
+                    }
+                }
+            });
+
+            utils.showToast('局域网网盘已就绪', 'success');
         });
 
         // 页面卸载清理
@@ -2039,13 +2042,12 @@
         });
 
         // 性能监控
-        if (window.performance && window.performance.timing) {
-            window.addEventListener('load', () => {
-                const timing = window.performance.timing;
-                const loadTime = timing.loadEventEnd - timing.navigationStart;
-                console.log(`页面加载时间: ${loadTime}ms`);
-            });
-        }
+        window.addEventListener('load', () => {
+            const navEntry = performance.getEntriesByType('navigation')[0];
+            if (navEntry) {
+                console.log(`页面加载时间: ${Math.round(navEntry.duration)}ms`);
+            }
+        });
 
 
         // 开发模式下的调试工具

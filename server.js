@@ -19,7 +19,7 @@ const {
 } = require('./lib/utils');
 
 const app = express();
-const PORT = parseInt(process.env.PORT, 10) || 5500;
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 const UPLOAD_DIR = path.resolve(__dirname, process.env.UPLOAD_DIR || 'uploads');
 const TEMP_DIR = path.resolve(__dirname, process.env.TEMP_DIR || '.temp_chunks');
 const DEDUP_DB_PATH = path.join(UPLOAD_DIR, '.dedup_hashes.json');
@@ -544,8 +544,8 @@ app.get('/api/upload/chunks/:uploadId', wrap((req, res) => {
     });
 }));
 
-// 合并分块并完成上传
-app.post('/api/upload/merge', wrap(async (req, res) => {
+// 合并分块并完成上传（用 multer.none() 解析 multipart/form-data，避免 JSON 触发 CORS 预检）
+app.post('/api/upload/merge', multer().none(), wrap(async (req, res) => {
     const { uploadId, targetFolder, customFolderName } = req.body;
     if (!uploadId || !/^[a-zA-Z0-9_-]+$/.test(uploadId)) {
         return res.status(400).json({ error: '无效的 uploadId' });

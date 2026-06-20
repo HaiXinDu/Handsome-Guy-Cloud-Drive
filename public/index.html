@@ -1276,17 +1276,17 @@
                 }
                 await Promise.all(workers);
 
-                // 合并分块
-                const mergeBody = { uploadId };
+                // 合并分块（使用 FormData 避免 application/json 触发 CORS 预检）
+                const mergeForm = new FormData();
+                mergeForm.append('uploadId', uploadId);
                 const selectedFolder = elements.folderSelect.value;
                 const customFolderName = elements.folderNameInput.value.trim();
-                if (selectedFolder) mergeBody.targetFolder = selectedFolder;
-                else if (customFolderName) mergeBody.customFolderName = customFolderName;
+                if (selectedFolder) mergeForm.append('targetFolder', selectedFolder);
+                else if (customFolderName) mergeForm.append('customFolderName', customFolderName);
 
                 const mergeRes = await fetch('api/upload/merge', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(mergeBody)
+                    body: mergeForm
                 });
 
                 if (!mergeRes.ok) {
